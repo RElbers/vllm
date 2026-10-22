@@ -1281,7 +1281,8 @@ environment_variables: dict[str, Callable[[], Any]] = {
         os.getenv("VLLM_ROCM_USE_AITER_LINEAR_HIPBMM", "False").lower() in ("true", "1")
     ),
     # On gfx942, run MXFP8 linears as aiter per-token fp8 GEMMs on weights
-    # requantized to one scale per output row, for shapes aiter has tuned.
+    # requantized to one scale per output row: hipBLASLt with
+    # VLLM_ROCM_USE_AITER_LINEAR_HIPBMM, else for shapes aiter has tuned.
     "VLLM_ROCM_USE_AITER_MXFP8_PTPC": lambda: (
         os.getenv("VLLM_ROCM_USE_AITER_MXFP8_PTPC", "False").lower() in ("true", "1")
     ),
