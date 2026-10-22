@@ -2352,6 +2352,10 @@ class KMxfp8Static(QuantKeyScheme):
         # the fp8 asserts when the weight is already >=2-byte.
         if layer.weight.element_size() >= 2:
             return
+        # Likewise the ROCm per-token kernel's post-load requantizes the weight
+        # to the platform FP8 dtype with an fp32 per-row scale.
+        if layer.weight_scale.dtype == torch.float32:
+            return
         if getattr(layer, "is_bmm", False) and layer.weight.ndim == 3:
             return
         assert layer.weight.ndim == 2 and layer.weight.dtype == MXFP8_VALUE_DTYPE

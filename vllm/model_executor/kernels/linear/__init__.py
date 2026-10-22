@@ -132,6 +132,9 @@ from vllm.model_executor.kernels.linear.mxfp8.pytorch import (
 from vllm.model_executor.kernels.linear.mxfp8.rocm_native import (
     RocmDotScaledMxfp8LinearKernel,
 )
+from vllm.model_executor.kernels.linear.mxfp8.rocm_ptpc import (
+    RocmPtpcMxfp8LinearKernel,
+)
 from vllm.model_executor.kernels.linear.mxfp8.xpu import (
     XPUMxFp8LinearKernel,
 )
@@ -354,6 +357,7 @@ _LINEAR_BACKEND_KERNEL_MAP: dict[str, set[type]] = {
         AiterPerTokenFp8ScaledMMLinearKernel,
         AiterPreshuffledPerTokenFp8ScaledMMLinearKernel,
         AiterMxfp4LinearKernel,
+        RocmPtpcMxfp8LinearKernel,
     },
     "machete": {
         MacheteLinearKernel,
@@ -572,6 +576,8 @@ _POSSIBLE_MXFP8_KERNELS: dict[PlatformEnum, list[type[Mxfp8LinearKernel]]] = {
         # Native CDNA4 (gfx950) MX linear; is_supported() gates to gfx95x and
         # falls through to BF16 emulation (hipBLASLt) elsewhere / on regression.
         RocmDotScaledMxfp8LinearKernel,
+        # gfx942, opt-in: per-token FP8 GEMM for shapes aiter has tuned.
+        RocmPtpcMxfp8LinearKernel,
         EmulationMxfp8LinearKernel,
     ],
     PlatformEnum.XPU: [

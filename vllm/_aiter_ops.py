@@ -2196,6 +2196,7 @@ class rocm_aiter_ops:
     _FP8BMM_ENABLED = envs.VLLM_ROCM_USE_AITER_FP8BMM
     _FP4BMM_ENABLED = envs.VLLM_ROCM_USE_AITER_FP4BMM
     _LINEAR_HIPBMM_ENABLED = envs.VLLM_ROCM_USE_AITER_LINEAR_HIPBMM
+    _MXFP8_PTPC_ENABLED = envs.VLLM_ROCM_USE_AITER_MXFP8_PTPC
     # TODO: Consolidate under VLLM_ROCM_USE_AITER_ROPE
     _TRITON_ROTARY_EMBED = envs.VLLM_ROCM_USE_AITER_TRITON_ROPE
     _TRITON_SPARSE_MLA = envs.VLLM_ROCM_USE_AITER_TRITON_SPARSE_MLA
@@ -2226,6 +2227,7 @@ class rocm_aiter_ops:
         cls._FP8BMM_ENABLED = envs.VLLM_ROCM_USE_AITER_FP8BMM
         cls._FP4BMM_ENABLED = envs.VLLM_ROCM_USE_AITER_FP4BMM
         cls._LINEAR_HIPBMM_ENABLED = envs.VLLM_ROCM_USE_AITER_LINEAR_HIPBMM
+        cls._MXFP8_PTPC_ENABLED = envs.VLLM_ROCM_USE_AITER_MXFP8_PTPC
         cls._TRITON_ROTARY_EMBED = envs.VLLM_ROCM_USE_AITER_TRITON_ROPE
         cls._TRITON_SPARSE_MLA = envs.VLLM_ROCM_USE_AITER_TRITON_SPARSE_MLA
         cls._MOE_SHARED_EXPERTS_ENABLED = envs.VLLM_ROCM_USE_AITER_FUSION_SHARED_EXPERTS
@@ -2559,6 +2561,13 @@ class rocm_aiter_ops:
             and (get_cdna_version() > 2)
             and cls._LINEAR_HIPBMM_ENABLED
         )
+
+    @classmethod
+    @if_aiter_supported
+    def is_mxfp8_ptpc_enabled(cls) -> bool:
+        from vllm.platforms.rocm import on_gfx942
+
+        return cls.is_linear_fp8_enabled() and on_gfx942() and cls._MXFP8_PTPC_ENABLED
 
     @classmethod
     @if_aiter_supported

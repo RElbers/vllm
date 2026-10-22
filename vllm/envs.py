@@ -139,6 +139,7 @@ if TYPE_CHECKING:
     VLLM_ROCM_MUSE_MOE_REDUCE_DTYPE: str = "fp32"
     VLLM_ROCM_USE_AITER_LINEAR: bool = True
     VLLM_ROCM_USE_AITER_LINEAR_HIPBMM: bool = False
+    VLLM_ROCM_USE_AITER_MXFP8_PTPC: bool = False
     VLLM_ROCM_USE_AITER_MOE: bool = True
     VLLM_ROCM_AITER_MOE_DISPATCH_POLICY: int = 0
     VLLM_ROCM_USE_AITER_MOE_A4W4_DSV4: bool | None = None
@@ -1278,6 +1279,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     "VLLM_ROCM_USE_AITER_LINEAR_HIPBMM": lambda: (
         os.getenv("VLLM_ROCM_USE_AITER_LINEAR_HIPBMM", "False").lower() in ("true", "1")
+    ),
+    # On gfx942, run MXFP8 linears as aiter per-token fp8 GEMMs on weights
+    # requantized to one scale per output row, for shapes aiter has tuned.
+    "VLLM_ROCM_USE_AITER_MXFP8_PTPC": lambda: (
+        os.getenv("VLLM_ROCM_USE_AITER_MXFP8_PTPC", "False").lower() in ("true", "1")
     ),
     # Whether to use aiter moe ops.
     # By default is enabled.
