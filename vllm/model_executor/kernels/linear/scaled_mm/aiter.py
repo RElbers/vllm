@@ -280,6 +280,11 @@ class AiterHipbMMPerTokenFp8ScaledMMLinearKernel(FP8ScaledMMLinearKernel):
                 f"received N={N} and K={K}.",
             )
 
+        # hipBLASLt's preshuffled FP8 GEMM returns wrong values, not an
+        # error, for a K that is not a multiple of 64.
+        if K % 64 != 0:
+            return False, f"requires K divisible by 64, received K={K}."
+
         return True, None
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
