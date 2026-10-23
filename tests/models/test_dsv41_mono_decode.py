@@ -461,6 +461,17 @@ def test_opt_in_with_another_arch_for_flydsl_raises(monkeypatch, cdna, tp, targe
         md.MonoDecodeLayer.create(_decoder_layer(), _config())
 
 
+def test_opt_in_with_the_mxfp8_ptpc_kernel_raises(monkeypatch):
+    """The gfx942 MXFP8 per-token kernel requantizes the dense linears that the
+    gfx942 copies read, so the two are not combined."""
+    from vllm._aiter_ops import rocm_aiter_ops
+
+    _deployment(monkeypatch, cdna=3, tp=4)
+    monkeypatch.setattr(rocm_aiter_ops, "is_mxfp8_ptpc_enabled", lambda: True)
+    with pytest.raises(ValueError, match="VLLM_ROCM_USE_AITER_MXFP8_PTPC"):
+        md.MonoDecodeLayer.create(_decoder_layer(), _config())
+
+
 def _other_backend():
     layer = _decoder_layer()
     experts = layer.ffn.experts.routed_experts

@@ -348,6 +348,7 @@ class MonoDecodeLayer:
     ) -> "MonoDecodeLayer | None":
         if not vllm_config.kernel_config.monokernel:
             return None
+        from vllm._aiter_ops import rocm_aiter_ops
         from vllm.platforms.rocm import get_cdna_version
 
         # the deployment: an explicit opt-in that cannot run is an error
@@ -356,6 +357,10 @@ class MonoDecodeLayer:
             why = f"needs CDNA{'/'.join(map(str, CDNA_VERSIONS))}"
         elif get_tensor_model_parallel_world_size() not in (2, 4):
             why = "needs tensor parallel size 2 or 4"
+        elif rocm_aiter_ops.is_mxfp8_ptpc_enabled():
+            # the gfx942 copies read the dense linears' MXFP8 weights, which
+            # that kernel requantizes at load
+            why = "cannot run with VLLM_ROCM_USE_AITER_MXFP8_PTPC=1"
         else:
             why = _unsupported_moe(layer, vllm_config)
         if why is None:
