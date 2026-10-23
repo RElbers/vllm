@@ -1280,11 +1280,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "VLLM_ROCM_USE_AITER_LINEAR_HIPBMM": lambda: (
         os.getenv("VLLM_ROCM_USE_AITER_LINEAR_HIPBMM", "False").lower() in ("true", "1")
     ),
-    # On gfx942, run MXFP8 linears as aiter per-token fp8 GEMMs on weights
-    # requantized to one scale per output row: hipBLASLt with
-    # VLLM_ROCM_USE_AITER_LINEAR_HIPBMM, else for shapes aiter has tuned
-    # (DeepSeek V4.1 Flash on 304-CU parts, MI300X and MI325X). Meant for
-    # prefill; DeepSeek V4.1's --monokernel refuses to start with it.
+    # On gfx942, run MXFP8 linears as per-token fp8 GEMMs on weights requantized
+    # to one scale per output row: hipBLASLt with online tuning, else aiter's
+    # GEMM for shapes aiter has tuned (DeepSeek V4.1 Flash on 304-CU parts,
+    # MI300X and MI325X). Meant for prefill; DeepSeek V4.1's --monokernel
+    # refuses to start with it.
     "VLLM_ROCM_USE_AITER_MXFP8_PTPC": lambda: (
         os.getenv("VLLM_ROCM_USE_AITER_MXFP8_PTPC", "False").lower() in ("true", "1")
     ),

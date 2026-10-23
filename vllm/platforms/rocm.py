@@ -396,11 +396,12 @@ def get_rocm_version() -> tuple[int, ...] | None:
 
 
 # Enable HIP online tuning early, before hipBLASLt initializes.
-# Turn on hipBLASLt online tuning if use AITER hipBLASLt GEMM.
+# Turn on hipBLASLt online tuning if use AITER hipBLASLt GEMM, which the gfx942
+# MXFP8 per-token kernel uses by default.
 if (
     envs.VLLM_ROCM_USE_AITER
     and envs.VLLM_ROCM_USE_AITER_LINEAR
-    and envs.VLLM_ROCM_USE_AITER_LINEAR_HIPBMM
+    and (envs.VLLM_ROCM_USE_AITER_LINEAR_HIPBMM or envs.VLLM_ROCM_USE_AITER_MXFP8_PTPC)
     and get_cdna_version() > 2
 ):
     os.environ["HIP_ONLINE_TUNING"] = "1"

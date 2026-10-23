@@ -4,13 +4,14 @@
 
 gfx942 has no microscaling matrix cores, so the weight is requantized at load
 to one power-of-two scale per output row (see aiter's mxfp8_to_per_row_fp8)
-and activations are quantized per token. The GEMM is the first of vLLM's
-aiter per-token FP8 kernels that takes the shape; other shapes stay on the
-BF16 emulation.
+and activations are quantized per token. The GEMM is hipBLASLt's, with online
+tuning, for every shape it takes, else aiter's for shapes aiter has tuned; other
+shapes stay on the BF16 emulation.
 """
 
 import torch
 
+import vllm.envs as envs
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.model_executor.kernels.linear.scaled_mm.aiter import (
     AiterHipbMMPerTokenFp8ScaledMMLinearKernel,
@@ -33,9 +34,28 @@ from vllm.platforms import current_platform
 from .emulation import EmulationMxfp8LinearKernel
 from .Mxfp8LinearKernel import Mxfp8LinearKernel, Mxfp8LinearLayerConfig
 
-# In the priority order vLLM gives them for ROCm per-token FP8 layers.
+
+class _HipbMMKernel(AiterHipbMMPerTokenFp8ScaledMMLinearKernel):
+    """vLLM's hipBLASLt per-token FP8 kernel, on by default for these linears.
+    VLLM_ROCM_USE_AITER_LINEAR_HIPBMM, which its base requires, would move every
+    other per-token FP8 layer as well."""
+
+    @classmethod
+    def is_supported(
+        cls, compute_capability: int | None = None
+    ) -> tuple[bool, str | None]:
+        import aiter
+
+        if not hasattr(aiter, "hipb_mm"):
+            return False, "requires aiter hipb_mm support."
+        return True, None
+
+
+# hipBLASLt first: it takes every shape with K divisible by 64 and is the faster
+# GEMM for these linears. aiter's preshuffled GEMM takes the shapes aiter has
+# tuned.
 _PER_TOKEN_KERNELS: tuple[type[FP8ScaledMMLinearKernel], ...] = (
-    AiterHipbMMPerTokenFp8ScaledMMLinearKernel,
+    _HipbMMKernel,
     AiterPreshuffledPerTokenFp8ScaledMMLinearKernel,
 )
 
@@ -50,12 +70,21 @@ def _per_token_config(c: Mxfp8LinearLayerConfig) -> FP8ScaledMMLinearLayerConfig
     )
 
 
+def _is_disabled(kernel: type[FP8ScaledMMLinearKernel]) -> bool:
+    # by the names in vLLM's kernel lists, so _HipbMMKernel counts as its base
+    return any(k.__name__ in envs.VLLM_DISABLED_KERNELS for k in kernel.__mro__)
+
+
 def _per_token_kernel(
     c: Mxfp8LinearLayerConfig,
 ) -> type[FP8ScaledMMLinearKernel] | None:
     config = _per_token_config(c)
     for kernel in _PER_TOKEN_KERNELS:
-        if kernel.is_supported()[0] and kernel.can_implement(config)[0]:
+        if (
+            not _is_disabled(kernel)
+            and kernel.is_supported()[0]
+            and kernel.can_implement(config)[0]
+        ):
             return kernel
     return None
 
@@ -97,8 +126,8 @@ class RocmPtpcMxfp8LinearKernel(Mxfp8LinearKernel):
     def can_implement(cls, c: Mxfp8LinearLayerConfig) -> tuple[bool, str | None]:
         if _per_token_kernel(c) is None:
             return False, (
-                "no aiter per-token FP8 kernel takes this shape: set "
-                "VLLM_ROCM_USE_AITER_LINEAR_HIPBMM=1 or tune it in aiter"
+                "neither hipBLASLt (K divisible by 64) nor a tuned aiter GEMM "
+                "takes this shape"
             )
         return True, None
 

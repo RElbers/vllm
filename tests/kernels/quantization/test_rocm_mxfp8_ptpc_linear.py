@@ -65,11 +65,14 @@ UNTUNED_SHAPE = (544, 1088)
 K_NOT_64_SHAPE = (544, 1056)
 
 
-def _set_flags(monkeypatch: pytest.MonkeyPatch, ptpc: str, hipbmm: str) -> None:
+def _set_flags(monkeypatch: pytest.MonkeyPatch, ptpc: str, gemm: str) -> None:
     monkeypatch.setenv("VLLM_ROCM_USE_AITER", "1")
     monkeypatch.setenv("VLLM_ROCM_USE_AITER_LINEAR", "1")
     monkeypatch.setenv("VLLM_ROCM_USE_AITER_MXFP8_PTPC", ptpc)
-    monkeypatch.setenv("VLLM_ROCM_USE_AITER_LINEAR_HIPBMM", hipbmm)
+    if gemm == "aiter":
+        monkeypatch.setenv(
+            "VLLM_DISABLED_KERNELS", "AiterHipbMMPerTokenFp8ScaledMMLinearKernel"
+        )
     rocm_aiter_ops.refresh_env_variables()
 
 
@@ -81,7 +84,7 @@ def set_flags(monkeypatch: pytest.MonkeyPatch):
     rocm_aiter_ops.refresh_env_variables()
 
 
-@pytest.fixture(params=["0", "1"], ids=["aiter_gemm", "hipblaslt"])
+@pytest.fixture(params=["aiter", "hipblaslt"])
 def enable_ptpc(set_flags, request):
     set_flags("1", request.param)
     return request.param
@@ -108,18 +111,18 @@ def _rel_err(out: torch.Tensor, ref: torch.Tensor) -> float:
     "weight_shape", [TUNED_SHAPES[1], UNTUNED_SHAPE, K_NOT_64_SHAPE]
 )
 @pytest.mark.parametrize("ptpc", ["0", "1"])
-@pytest.mark.parametrize("hipbmm", ["0", "1"])
+@pytest.mark.parametrize("gemm", ["aiter", "hipblaslt"])
 def test_selection(
     set_flags,
     weight_shape: tuple[int, int],
     ptpc: str,
-    hipbmm: str,
+    gemm: str,
 ):
-    set_flags(ptpc, hipbmm)
+    set_flags(ptpc, gemm)
     kernel = init_mxfp8_linear_kernel(weight_shape=weight_shape, bmm_batch_size=None)
     # hipBLASLt takes any shape; aiter's own GEMM only tuned ones
     takes_shape = weight_shape == TUNED_SHAPES[1] or (
-        hipbmm == "1" and weight_shape == UNTUNED_SHAPE
+        gemm == "hipblaslt" and weight_shape == UNTUNED_SHAPE
     )
     expected = (
         RocmPtpcMxfp8LinearKernel
@@ -135,7 +138,7 @@ def test_selection(
 def test_matches_mxfp8_reference(
     enable_ptpc, weight_shape: tuple[int, int], x_shape: tuple[int, ...]
 ):
-    if weight_shape == UNTUNED_SHAPE and enable_ptpc == "0":
+    if weight_shape == UNTUNED_SHAPE and enable_ptpc == "aiter":
         pytest.skip("aiter's own GEMM takes only tuned shapes")
     torch.manual_seed(0)
     n, k = weight_shape

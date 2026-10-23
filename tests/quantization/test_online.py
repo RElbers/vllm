@@ -491,8 +491,6 @@ def test_online_mxfp8_gfx942_per_token_kernel_matches_emulation(
     outputs = {}
     for ptpc, kernel in kernels.items():
         monkeypatch.setenv("VLLM_ROCM_USE_AITER_MXFP8_PTPC", ptpc)
-        # hipBLASLt takes every shape; aiter's own GEMM only the tuned ones
-        monkeypatch.setenv("VLLM_ROCM_USE_AITER_LINEAR_HIPBMM", ptpc)
 
         def check_model(model, kernel=kernel):
             proj = model.model.layers[0].self_attn.qkv_proj
