@@ -787,7 +787,7 @@ def test_engram_use_thp_lookup_and_fallback(monkeypatch, register_fails):
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA required")
+@pytest.mark.skipif(not current_platform.is_cuda_alike(), reason="GPU required")
 def test_engram_shared_prefetch_stream_waits_per_layer():
     """Consuming a layer must not wait for later layers on the shared stream."""
     stream = torch.cuda.Stream()
@@ -823,7 +823,7 @@ def test_engram_shared_prefetch_stream_waits_per_layer():
     torch.accelerator.synchronize()
 
 
-@pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA required")
+@pytest.mark.skipif(not current_platform.is_cuda_alike(), reason="GPU required")
 @pytest.mark.parametrize("cpu_offload", [None, False])
 def test_engram_constructor_honors_offload(monkeypatch, cpu_offload):
     """Default offload uses pinned storage and the given stream; False uses HBM."""
@@ -893,7 +893,7 @@ def test_engram_constructor_honors_offload(monkeypatch, cpu_offload):
         assert streams == [main]
 
 
-@pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA required")
+@pytest.mark.skipif(not current_platform.is_cuda_alike(), reason="GPU required")
 @pytest.mark.parametrize(
     "cpu_offload,delay",
     [(False, None), (True, None), (True, "producer"), (True, "lookup")],
@@ -904,26 +904,15 @@ def test_engram_prepared_rows_survive_graph_breaks(cpu_offload, capture, delay):
     _run_engram_prepared_rows(cpu_offload, capture, delay=delay)
 
 
-@pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA required")
-@pytest.mark.parametrize(
-    "missing_dependency", ["record_stream", "producer_wait", "consumer_wait"]
-)
+@pytest.mark.skipif(not current_platform.is_cuda_alike(), reason="GPU required")
+@pytest.mark.parametrize("missing_dependency", ["producer_wait", "consumer_wait"])
 def test_engram_prefetch_detects_missing_dependency(monkeypatch, missing_dependency):
     """Negative controls must expose incorrect rows when a dependency is removed."""
-    if (
-        missing_dependency == "record_stream"
-        and torch.cuda.memory.get_allocator_backend() != "native"
-    ):
-        pytest.skip(
-            "The allocator reuse negative control requires the native allocator"
-        )
 
     def start(self, hash_ids, rows):
         stream = self._prefetch_stream
         if missing_dependency != "producer_wait":
             stream.wait_stream(torch.cuda.current_stream())
-        if missing_dependency != "record_stream":
-            hash_ids.record_stream(stream)
         with torch.cuda.stream(stream):
             self.embed_tokens.lookup(hash_ids, rows, background=True)
             self._prefetch_done.record(stream)
@@ -969,8 +958,8 @@ def _run_engram_prepared_rows(
     engram = Engram.__new__(Engram)
     torch.nn.Module.__init__(engram)
     engram.embed_tokens = layer
-    engram._prefetch_stream = torch.cuda.Stream() if cpu_offload else None
-    engram._prefetch_done = torch.cuda.Event() if cpu_offload else None
+    with torch.device("cuda"):
+        engram._init_staging(num_tokens, layer.dim)
     # Exercise the production eager boundaries even when the test process
     # imported Engram before breakable graphs were enabled.
     if capture == "breakable":
@@ -982,13 +971,6 @@ def _run_engram_prepared_rows(
                 fn = eager_break_during_capture(inspect.unwrap(getattr(Engram, name)))
                 setattr(engram, name, fn.__get__(engram, Engram))
     engram.use_sequence_parallel = use_sequence_parallel
-    engram.staged_rows = torch.empty(
-        num_tokens,
-        layer.part_n_hash_cols,
-        layer.dim,
-        dtype=torch.bfloat16,
-        device="cuda",
-    )
     # Match the non-contiguous per-layer slice of the model hash tensor.
     hashes = torch.randint(
         0,
@@ -1031,7 +1013,9 @@ def _run_engram_prepared_rows(
         with torch.cuda.graph(graph):
             step()
     elif capture == "breakable":
-        graph = BreakableCUDAGraphCapture()
+        # Like vLLM, share one pool across segments, so a block freed before an
+        # eager break can be reused after it.
+        graph = BreakableCUDAGraphCapture(pool=torch.cuda.graph_pool_handle())
         with torch.cuda.stream(warmup), graph:
             step(graph)
         torch.cuda.current_stream().wait_stream(warmup)

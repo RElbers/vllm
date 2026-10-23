@@ -1605,6 +1605,12 @@ class Engram(nn.Module):
         if not self.embed_tokens.cpu_offload:
             self._prefetch_stream = None
             return
+        # The prefetch reads its hash IDs on another stream after an eager
+        # break, whose replay holds only weak references, so they must not
+        # live in the cudagraph pool.
+        self.staged_hash_ids = torch.empty(
+            self.staged_rows.shape[0], self.embed_tokens.n_hash_cols, dtype=torch.int32
+        )
         if self._prefetch_stream is None:
             self._prefetch_stream = torch.cuda.Stream(device=self.staged_rows.device)
         self._prefetch_done = torch.cuda.Event()
@@ -1617,7 +1623,9 @@ class Engram(nn.Module):
         if self._prefetch_stream is None:
             self.embed_tokens.lookup(hash_ids, rows)
         else:
-            self._start_prefetch(hash_ids, rows)
+            staged = self.staged_hash_ids[: hash_ids.shape[0]]
+            staged.copy_(hash_ids)
+            self._start_prefetch(staged, rows)
 
     @eager_break_during_capture
     def _start_prefetch(self, hash_ids: torch.Tensor, rows: torch.Tensor) -> None:
@@ -1636,8 +1644,6 @@ class Engram(nn.Module):
             stream = self._prefetch_stream
             assert stream is not None
             stream.wait_stream(current)
-            # Keep temporary hash storage alive until lookup finishes reading it.
-            hash_ids.record_stream(stream)
             with torch.cuda.stream(stream):
                 self.embed_tokens.lookup(hash_ids, rows, background=True)
         assert self._prefetch_done is not None
