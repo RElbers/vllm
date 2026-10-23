@@ -12,6 +12,7 @@ import pytest
 import torch
 from torch.distributed import ProcessGroup
 
+from tests.models.utils import check_logprobs_close
 from tests.quantization.utils import (
     _test_online_quant_peak_mem_impl,
     is_quant_method_supported,
@@ -37,6 +38,10 @@ from vllm.model_executor.kernels.linear.mxfp8.emulation import (
 from vllm.model_executor.kernels.linear.mxfp8.humming import HummingMxfp8LinearKernel
 from vllm.model_executor.kernels.linear.mxfp8.marlin import (
     MarlinMxfp8LinearKernel,
+)
+from vllm.model_executor.kernels.linear.mxfp8.rocm_ptpc import (
+    RocmPtpcMxfp8LinearKernel,
+    has_aiter_requant,
 )
 from vllm.model_executor.kernels.linear.scaled_mm import (
     MarlinFP8ScaledMMLinearKernel,
@@ -468,6 +473,45 @@ def test_online_prequantized_compatibility(
     elif not raises_requantization_error:
         assert layer.quant_method.uses_meta_device
         assert layer.quant_method.requantization_source is None
+
+
+@pytest.mark.skipif(
+    not (on_gfx942() and has_aiter_requant()),
+    reason="Requires ROCm gfx942 + aiter with mxfp8_to_per_row_fp8",
+)
+def test_online_mxfp8_gfx942_per_token_kernel_matches_emulation(
+    vllm_runner, example_prompts, monkeypatch
+) -> None:
+    """On gfx942, MXFP8 linears on the per-token FP8 kernel give the greedy
+    logprobs of the BF16 emulation."""
+    max_tokens, num_logprobs = 16, 5
+    monkeypatch.setenv("VLLM_ALLOW_INSECURE_SERIALIZATION", "1")
+    monkeypatch.setenv("VLLM_ROCM_USE_AITER", "1")
+    kernels = {"0": EmulationMxfp8LinearKernel, "1": RocmPtpcMxfp8LinearKernel}
+    outputs = {}
+    for ptpc, kernel in kernels.items():
+        monkeypatch.setenv("VLLM_ROCM_USE_AITER_MXFP8_PTPC", ptpc)
+        # hipBLASLt takes every shape; aiter's own GEMM only the tuned ones
+        monkeypatch.setenv("VLLM_ROCM_USE_AITER_LINEAR_HIPBMM", ptpc)
+
+        def check_model(model, kernel=kernel):
+            proj = model.model.layers[0].self_attn.qkv_proj
+            assert type(proj.quant_method.kernel) is kernel
+
+        with vllm_runner(
+            "Qwen/Qwen3-0.6B", quantization="mxfp8", enforce_eager=True
+        ) as llm:
+            llm.apply_model(check_model)
+            outputs[ptpc] = llm.generate_greedy_logprobs(
+                example_prompts, max_tokens, num_logprobs
+            )
+
+    check_logprobs_close(
+        outputs_0_lst=outputs["0"],
+        outputs_1_lst=outputs["1"],
+        name_0="emulation",
+        name_1="per_token_fp8",
+    )
 
 
 @pytest.mark.skipif(
