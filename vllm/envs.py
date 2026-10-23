@@ -1282,7 +1282,8 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     # On gfx942, run MXFP8 linears as aiter per-token fp8 GEMMs on weights
     # requantized to one scale per output row: hipBLASLt with
-    # VLLM_ROCM_USE_AITER_LINEAR_HIPBMM, else for shapes aiter has tuned.
+    # VLLM_ROCM_USE_AITER_LINEAR_HIPBMM, else for shapes aiter has tuned
+    # (DeepSeek V4.1 Flash on 304-CU parts, MI300X and MI325X).
     "VLLM_ROCM_USE_AITER_MXFP8_PTPC": lambda: (
         os.getenv("VLLM_ROCM_USE_AITER_MXFP8_PTPC", "False").lower() in ("true", "1")
     ),

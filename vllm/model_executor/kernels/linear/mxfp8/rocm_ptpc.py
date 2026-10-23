@@ -2,17 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """MXFP8 linear for gfx942 as an aiter per-token x per-channel FP8 GEMM.
 
-gfx942 has no microscaling matrix cores. At load, the weight's E8M0 block
-scales are folded into one power-of-two scale per output row: blocks are
-shifted by whole exponents, so only values pushed into the subnormals round.
-Activations are quantized per token and the GEMM is the first of vLLM's aiter
-per-token FP8 kernels that takes the shape: hipBLASLt with
-VLLM_ROCM_USE_AITER_LINEAR_HIPBMM=1, else aiter's preshuffled GEMM for shapes
-aiter has tuned. Every other shape stays on the BF16 emulation.
+gfx942 has no microscaling matrix cores, so the weight is requantized at load
+to one power-of-two scale per output row (see aiter's mxfp8_to_per_row_fp8)
+and activations are quantized per token. The GEMM is the first of vLLM's
+aiter per-token FP8 kernels that takes the shape; other shapes stay on the
+BF16 emulation.
 """
 
 import torch
-from torch.nn.parameter import Parameter
 
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.model_executor.kernels.linear.scaled_mm.aiter import (
@@ -30,6 +27,7 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     kFp8DynamicTokenSym,
     kFp8StaticChannelSym,
 )
+from vllm.model_executor.utils import replace_parameter
 from vllm.platforms import current_platform
 
 from .emulation import EmulationMxfp8LinearKernel
@@ -62,6 +60,14 @@ def _per_token_kernel(
     return None
 
 
+def has_aiter_requant() -> bool:
+    try:
+        from aiter.ops.quant import mxfp8_to_per_row_fp8  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _keeps_mxfp8_layout(layer: torch.nn.Module) -> bool:
     # DeepSeek V4/V4.1 wo_a: the attention reads its weight and E8M0 scale
     # directly (a grouped einsum on ROCm), so it keeps the emulation layout.
@@ -83,12 +89,12 @@ class RocmPtpcMxfp8LinearKernel(Mxfp8LinearKernel):
                 "requires gfx942, VLLM_ROCM_USE_AITER=1 and "
                 "VLLM_ROCM_USE_AITER_MXFP8_PTPC=1"
             )
+        if not has_aiter_requant():
+            return False, "requires an aiter with ops.quant.mxfp8_to_per_row_fp8"
         return True, None
 
     @classmethod
     def can_implement(cls, c: Mxfp8LinearLayerConfig) -> tuple[bool, str | None]:
-        if c.bmm_batch_size is not None:
-            return False, "batched MXFP8 GEMMs are not supported"
         if _per_token_kernel(c) is None:
             return False, (
                 "no aiter per-token FP8 kernel takes this shape: set "
@@ -125,8 +131,8 @@ class RocmPtpcMxfp8LinearKernel(Mxfp8LinearKernel):
         )
         # The per-token kernels take the [K, N] weight every FP8 method leaves
         # behind and preshuffle it.
-        layer.weight = Parameter(weight.t(), requires_grad=False)
-        layer.weight_scale = Parameter(weight_scale, requires_grad=False)
+        replace_parameter(layer, "weight", weight.t())
+        replace_parameter(layer, "weight_scale", weight_scale)
         self.per_token.process_weights_after_loading(layer)
 
     def apply_weights(

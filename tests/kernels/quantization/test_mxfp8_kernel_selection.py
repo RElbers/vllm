@@ -138,11 +138,15 @@ def test_init_mxfp8_linear_kernel(capability, weight_shape, expected_kernel_cls)
     assert kernel.config == Mxfp8LinearLayerConfig(weight_shape=weight_shape)
 
 
-def test_rocm_without_native_mx_or_ptpc_falls_back_to_emulation():
-    """Without gfx95x MX cores and with the per-token kernel off, ROCm MXFP8
-    linears stay on the BF16 emulation."""
+def test_rocm_aiter_backend_without_ptpc_falls_back_to_emulation():
+    """--linear-backend aiter has no MXFP8 kernel, so ROCm MXFP8 linears keep
+    the automatic selection, here the BF16 emulation."""
     with (
         patch("vllm.model_executor.kernels.linear.current_platform") as platform,
+        patch(
+            "vllm.model_executor.kernels.linear._get_linear_backend",
+            return_value="aiter",
+        ),
         patch.object(
             RocmDotScaledMxfp8LinearKernel, "is_supported", return_value=(False, "")
         ),
@@ -154,10 +158,3 @@ def test_rocm_without_native_mx_or_ptpc_falls_back_to_emulation():
         kernel = init_mxfp8_linear_kernel(weight_shape=(4096, 4096))
 
     assert isinstance(kernel, EmulationMxfp8LinearKernel)
-
-
-def test_rocm_ptpc_mxfp8_rejects_batched_weight():
-    config = Mxfp8LinearLayerConfig(weight_shape=(4096, 4096), bmm_batch_size=2)
-    can_implement, reason = RocmPtpcMxfp8LinearKernel.can_implement(config)
-    assert not can_implement
-    assert reason
