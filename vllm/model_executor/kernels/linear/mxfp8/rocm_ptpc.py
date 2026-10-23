@@ -13,6 +13,7 @@ import torch
 
 import vllm.envs as envs
 from vllm._aiter_ops import rocm_aiter_ops
+from vllm.config import get_current_vllm_config_or_none
 from vllm.model_executor.kernels.linear.scaled_mm.aiter import (
     AiterHipbMMPerTokenFp8ScaledMMLinearKernel,
     AiterPreshuffledPerTokenFp8ScaledMMLinearKernel,
@@ -89,6 +90,13 @@ def _per_token_kernel(
     return None
 
 
+def _model_dtype() -> torch.dtype | None:
+    config = get_current_vllm_config_or_none()
+    if config is None or config.model_config is None:
+        return None
+    return config.model_config.dtype
+
+
 def has_aiter_requant() -> bool:
     try:
         from aiter.ops.quant import mxfp8_to_per_row_fp8  # noqa: F401
@@ -124,6 +132,9 @@ class RocmPtpcMxfp8LinearKernel(Mxfp8LinearKernel):
 
     @classmethod
     def can_implement(cls, c: Mxfp8LinearLayerConfig) -> tuple[bool, str | None]:
+        # The per-token kernels compute and return bf16.
+        if (dtype := _model_dtype()) not in (None, torch.bfloat16):
+            return False, f"requires a bf16 model, the model is {dtype}"
         if _per_token_kernel(c) is None:
             return False, (
                 "neither hipBLASLt (K divisible by 64) nor a tuned aiter GEMM "
@@ -172,5 +183,10 @@ class RocmPtpcMxfp8LinearKernel(Mxfp8LinearKernel):
     ) -> torch.Tensor:
         if _keeps_mxfp8_layout(layer):
             return self.emulation.apply_weights(layer, x, bias)
-        out = self.per_token.apply_weights(layer, x, bias)
-        return out.view(*x.shape[:-1], out.shape[-1])
+        assert x.dtype == torch.bfloat16, f"bf16 activations only, got {x.dtype}"
+        N = self.config.weight_shape[0]
+        # hipBLASLt exits the process on an empty GEMM.
+        if x.numel() == 0:
+            return x.new_empty((*x.shape[:-1], N))
+        out = self.per_token.apply_weights(layer, x.reshape(-1, x.shape[-1]), bias)
+        return out.view(*x.shape[:-1], N)

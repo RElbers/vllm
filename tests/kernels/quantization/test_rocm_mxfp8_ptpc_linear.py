@@ -22,6 +22,10 @@ from vllm.model_executor.kernels.linear.mxfp8.rocm_ptpc import (
     RocmPtpcMxfp8LinearKernel,
     has_aiter_requant,
 )
+from vllm.model_executor.kernels.linear.scaled_mm.aiter import (
+    AiterHipbMMPerTokenFp8ScaledMMLinearKernel,
+    AiterPreshuffledPerTokenFp8ScaledMMLinearKernel,
+)
 from vllm.model_executor.layers.linear import ReplicatedLinear
 from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config
 from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
@@ -145,6 +149,11 @@ def test_matches_mxfp8_reference(
     layer = _make_layer(n, k)
     w_ref = dequant_mxfp8_to_bf16(layer.weight.data, layer.weight_scale.data).float()
     kernel = RocmPtpcMxfp8LinearKernel(Mxfp8LinearLayerConfig(weight_shape))
+    gemm = {
+        "aiter": AiterPreshuffledPerTokenFp8ScaledMMLinearKernel,
+        "hipblaslt": AiterHipbMMPerTokenFp8ScaledMMLinearKernel,
+    }[enable_ptpc]
+    assert isinstance(kernel.per_token, gemm)
     kernel.process_weights_after_loading(layer)
     assert layer.weight.dtype == current_platform.fp8_dtype()
     assert layer.weight_scale.numel() == n
@@ -155,6 +164,37 @@ def test_matches_mxfp8_reference(
     assert out.shape == (*x_shape, n) and out.dtype == torch.bfloat16
     # per-token FP8 activations are the only lossy step
     assert _rel_err(out, x.float() @ w_ref.t()) < 0.05
+
+
+@torch.inference_mode()
+def test_empty_and_strided_inputs(enable_ptpc):
+    n, k = TUNED_SHAPES[1]
+    layer = _make_layer(n, k)
+    w_ref = dequant_mxfp8_to_bf16(layer.weight.data, layer.weight_scale.data).float()
+    kernel = RocmPtpcMxfp8LinearKernel(Mxfp8LinearLayerConfig((n, k)))
+    kernel.process_weights_after_loading(layer)
+
+    empty = torch.empty(0, k, dtype=torch.bfloat16, device="cuda")
+    assert kernel.apply_weights(layer, empty).shape == (0, n)
+
+    x = torch.randn(100, 3, k, dtype=torch.bfloat16, device="cuda").transpose(0, 1)
+    out = kernel.apply_weights(layer, x)
+    assert out.shape == (3, 100, n)
+    assert _rel_err(out, x.float() @ w_ref.t()) < 0.05
+
+
+def test_non_bf16_model_keeps_emulation(set_flags, monkeypatch: pytest.MonkeyPatch):
+    """The per-token kernels compute and return bf16, so an fp16 model stays on
+    the emulation."""
+    set_flags("1", "hipblaslt")
+    config = SimpleNamespace(model_config=SimpleNamespace(dtype=torch.float16))
+    monkeypatch.setattr(
+        "vllm.model_executor.kernels.linear.mxfp8.rocm_ptpc."
+        "get_current_vllm_config_or_none",
+        lambda: config,
+    )
+    kernel = init_mxfp8_linear_kernel(weight_shape=TUNED_SHAPES[1])
+    assert type(kernel) is EmulationMxfp8LinearKernel
 
 
 @torch.inference_mode()

@@ -401,8 +401,10 @@ def get_rocm_version() -> tuple[int, ...] | None:
 if (
     envs.VLLM_ROCM_USE_AITER
     and envs.VLLM_ROCM_USE_AITER_LINEAR
-    and (envs.VLLM_ROCM_USE_AITER_LINEAR_HIPBMM or envs.VLLM_ROCM_USE_AITER_MXFP8_PTPC)
-    and get_cdna_version() > 2
+    and (
+        (envs.VLLM_ROCM_USE_AITER_LINEAR_HIPBMM and get_cdna_version() > 2)
+        or (envs.VLLM_ROCM_USE_AITER_MXFP8_PTPC and on_gfx942())
+    )
 ):
     os.environ["HIP_ONLINE_TUNING"] = "1"
 
