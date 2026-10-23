@@ -79,6 +79,12 @@ def eager_break_during_capture(fn: F) -> F:
     caller-provided output tensor; a fresh tensor returned by ``fn`` would
     change address each replay and break downstream graph segments.
 
+    **Arguments are weak references.** During capture and replay, tensor
+    arguments reach ``fn`` as weak references into the cudagraph pool. They
+    stay valid only on the capture stream: the next segment may reuse their
+    memory, and ``record_stream`` on them is a no-op. Work that ``fn`` leaves
+    running on another stream must read module-owned buffers instead.
+
     **Decorator order matters.** Apply as the *outermost* decorator if
     there are other decorators that introduce host-side side effects
     around the call -- the canonical example is
