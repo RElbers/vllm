@@ -77,6 +77,8 @@ class EngramPrefetch:
         for engram, (out, done) in self._buffers.items():
             assert engram._prefetch_done is not None
             stream.wait_event(engram._prefetch_done)
+            # This chain consumes the lookup in place of Engram._finish_prefetch.
+            engram._prefetch_pending = False
             with torch.cuda.stream(stream):
                 heads = engram.staged_rows[:num_tokens]
                 if engram.embed_tokens.tp_size > 1:
