@@ -1528,6 +1528,7 @@ class Engram(nn.Module):
 
     _prefetch_stream: torch.cuda.Stream | None = None
     _prefetch_done: torch.cuda.Event | None = None
+    _prefetch_pending: bool = False
     _batch: EngramBatch | None = None
 
     def __init__(
@@ -1631,6 +1632,10 @@ class Engram(nn.Module):
     def _start_prefetch(self, hash_ids: torch.Tensor, rows: torch.Tensor) -> None:
         # Eager boundaries let the lookup span piecewise graph segments, and
         # decide per replay (on the replay stream) whether it runs inline.
+        # The next step's hash IDs overwrite staged_hash_ids, so this lookup
+        # must have been waited on first.
+        assert not self._prefetch_pending, "previous Engram prefetch never consumed"
+        self._prefetch_pending = True
         num_tokens = hash_ids.shape[0]
         # All DP ranks must agree, or EP collectives wait on the slowest one.
         if is_forward_context_available() and (dp := get_forward_context().dp_metadata):
@@ -1653,6 +1658,7 @@ class Engram(nn.Module):
     def _finish_prefetch(self, event: torch.cuda.Event) -> None:
         # Wait for this layer's lookup only, not for later layers on the stream.
         torch.cuda.current_stream().wait_event(event)
+        self._prefetch_pending = False
 
     def _ready_rows(self, num_tokens: int) -> torch.Tensor:
         if self._prefetch_done is not None:
